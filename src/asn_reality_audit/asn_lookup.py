@@ -135,7 +135,7 @@ def lookup_team_cymru(ip: str, timeout: float) -> ASNLookupResult | None:
             prefix=fields[2] or None,
             sources=["team_cymru"],
         )
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return None
 
 

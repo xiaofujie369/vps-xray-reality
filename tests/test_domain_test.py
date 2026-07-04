@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from asn_reality_audit.domain_test import _san_matches, load_domain_list, recommended_fingerprint
+from asn_reality_audit.domain_test import (
+    _san_matches,
+    load_domain_list,
+    recommended_fingerprint,
+)
 
 
 @pytest.mark.parametrize(

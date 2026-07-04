@@ -3,14 +3,15 @@ from __future__ import annotations
 import ipaddress
 import re
 import shutil
+
 # Only fixed argv is used below; shell execution is never enabled.
 import subprocess  # nosec B404
 from collections import Counter
 
 import httpx
 
-from .models import IPDetection, InterfaceInfo
-
+from . import __version__
+from .models import InterfaceInfo, IPDetection
 
 IPV4_PROVIDERS = (
     "https://api.ipify.org",
@@ -67,7 +68,7 @@ def detect_public_ips(timeout: float = 5.0, include_ipv6: bool = True) -> IPDete
             for url in urls:
                 try:
                     with client.stream(
-                        "GET", url, headers={"User-Agent": "asn-reality-audit/0.1"}
+                        "GET", url, headers={"User-Agent": f"asn-reality-audit/{__version__}"}
                     ) as response:
                         response.raise_for_status()
                         body = bytearray()

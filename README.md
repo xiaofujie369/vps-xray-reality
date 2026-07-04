@@ -93,6 +93,72 @@ asn-reality-audit --domain-list ./domains.txt --verbose
 Custom lists are limited to 100 unique names. Run `asn-reality-audit --help` for all
 options.
 
+## Long-lived same-prefix domain discovery
+
+The optional discovery mode samples only the current server's BGP prefix and looks for
+HTTPS names that have long-lived RDAP registration or Certificate Transparency history.
+It is disabled unless `--discover-prefix-domains` is supplied.
+
+Conservative passive discovery (PTR, CT, and RDAP):
+
+```bash
+asn-reality-audit \
+  --discover-prefix-domains \
+  --passive-only \
+  --min-domain-age-days 365 \
+  --json --markdown
+```
+
+Allow bounded prefix probes. This samples at most 64 addresses by default and only
+connects to TCP/443, performs one TLS handshake without SNI, and extracts certificate
+CN/SAN names. It never probes another port or brute-forces SNI:
+
+```bash
+asn-reality-audit \
+  --discover-prefix-domains \
+  --allow-light-probe \
+  --prefix-scan-limit 64 \
+  --min-domain-age-days 365 \
+  --json --markdown \
+  --output ./asn-reality-report
+```
+
+Strict exact-prefix mode:
+
+```bash
+asn-reality-audit --discover-prefix-domains --same-prefix-only --allow-light-probe
+```
+
+To broaden recommendations, `--same-asn-only` also permits names routed elsewhere in
+the current ASN, while `--include-external-cdn` permits recognized large CDNs and
+hyperscalers. External CDN results are disabled by default.
+
+Relations mean:
+
+- `same_prefix`: at least one resolved address is inside the current BGP prefix.
+- `same_asn`: outside the exact prefix but routed by the current ASN.
+- `external_cdn`: routed by a recognized major CDN or hyperscaler.
+- `unrelated`: none of the above; never recommended by default.
+
+A candidate needs valid current DNS/TLS plus at least one age signal meeting the chosen
+threshold. Its separate 0-100 score combines RDAP age, exact-name CT history, current
+TLS/certificate/ALPN/HTTP health, latency, and network relation. Scores below 60 are not
+recommended.
+
+Example discovery output:
+
+```text
+ Long-lived Same Prefix / Same ASN Domain Candidates
+ #  Domain           Score   Relation     Age    CT history  TLS      HTTP
+ 1  old.example.com  88/100  same_prefix  1420d  1300d       TLSv1.3  200
+
+ Prefix: 77.73.14.0/24 | sampled IPs: 64/64 | mode: light_probe
+ serverName: old.example.com
+ dest: old.example.com:443
+ fingerprint: chrome
+ spiderX: /
+```
+
 ## Sample output
 
 ```text
@@ -143,7 +209,7 @@ python -m pytest
 
 The test suite uses deterministic mocks and does not require live network access.
 CI runs it on Debian 12, Ubuntu 22.04, and Ubuntu 24.04. It also validates the installer
-syntax and runs `pip-audit` and Bandit security checks.
+syntax and runs Ruff, `pip-audit`, and Bandit checks.
 
 ## How scoring works
 
@@ -163,3 +229,14 @@ Reports contain public network metadata and placeholder Xray settings only; real
 keys are never read. External public-IP and ASN providers necessarily receive the IP
 being queried. Run the CLI as an ordinary user unless your environment specifically
 requires otherwise.
+
+Discovery has additional safeguards: it is opt-in, defaults to passive methods, samples
+64 addresses with a hard maximum of 256, limits concurrency, caps discovered domains,
+and only permits direct prefix probes on port 443 after `--allow-light-probe`. It performs
+no vulnerability checks, exploit payloads, range expansion, or Xray modification.
+
+Passive data is inherently incomplete. PTR, RDAP, and crt.sh may be unavailable or
+rate-limited; registered-domain extraction uses a conservative built-in suffix list
+rather than a heavyweight Public Suffix dependency; Wayback evidence and optional
+external scanner accelerators are not implemented. Small VPS/reseller prefixes commonly
+produce no candidates. No recommendation guarantees reachability or filtering bypass.

@@ -921,3 +921,27 @@ I should get:
 5. `report.md`.
 
 The tool should be simple, local, practical, and production-quality.
+
+---
+
+## 28. v0.2 Same-Prefix Long-Lived Domain Discovery
+
+The optional `--discover-prefix-domains` mode extends the one-shot audit without adding
+a service, database, or web interface.
+
+- Passive discovery samples PTR records from at most 64 addresses in the current BGP
+  prefix, with a hard CLI maximum of 256.
+- `--allow-light-probe` additionally permits only TCP/443 and a TLS handshake without
+  SNI on sampled addresses to extract certificate CN/SAN names.
+- Candidate domains are validated with DNS, TCP/443, verified TLS, certificate hostname,
+  ALPN, and bounded streaming HTTP HEAD (GET only as fallback).
+- Domain age evidence comes from RDAP registration events and exact-name crt.sh history.
+- Relations are `same_prefix`, `same_asn`, `external_cdn`, or `unrelated`. Same-ASN and
+  external-CDN recommendations require their explicit CLI switches.
+- Sensitive-name heuristics, response-size limits, four-worker concurrency, short
+  timeouts, and hard candidate caps keep discovery conservative.
+- JSON and Markdown reports include discovery configuration, candidates, evidence,
+  rejected reasons, and suggested Reality settings.
+
+Wayback evidence and optional external binaries remain out of the v0.2 implementation;
+their model fields stay nullable for future backwards-compatible additions.

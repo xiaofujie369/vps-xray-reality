@@ -5,16 +5,16 @@ import re
 import socket
 import ssl
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import dns.exception
 import dns.resolver
 import httpx
 from cryptography import x509
 
+from . import __version__
 from .models import DomainResult
 from .scoring import score_domain
-
 
 BUILTIN_DOMAINS = (
     "www.microsoft.com",
@@ -39,7 +39,7 @@ BUILTIN_DOMAINS = (
     "www.asus.com",
 )
 
-ACCEPTED_HTTP_STATUSES = {200, 301, 302, 403, 405}
+ACCEPTED_HTTP_STATUSES = {200, 301, 302, 403, 404, 405}
 DOMAIN_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 MAX_CUSTOM_DOMAINS = 100
 
@@ -144,9 +144,11 @@ def test_domain(
             result.alpn = tls_socket.selected_alpn_protocol()
             der_certificate = tls_socket.getpeercert(binary_form=True)
             parsed = x509.load_der_x509_certificate(der_certificate)
+            result.cert_issuer = parsed.issuer.rfc4514_string()
+            result.cert_not_before = parsed.not_valid_before_utc
             expires = parsed.not_valid_after_utc
             result.cert_expires_at = expires
-            result.cert_valid = expires > datetime.now(timezone.utc)
+            result.cert_valid = expires > datetime.now(UTC)
             try:
                 san = parsed.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
                 names = san.get_values_for_type(x509.DNSName)
@@ -162,13 +164,23 @@ def test_domain(
             follow_redirects=False,
             trust_env=False,
             transport=transport,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; asn-reality-audit/0.1)"},
+            headers={"User-Agent": f"Mozilla/5.0 (compatible; asn-reality-audit/{__version__})"},
         ) as client:
-            # A streaming HEAD prevents a non-compliant custom server from forcing
-            # an unbounded response body into memory.
-            with client.stream("HEAD", f"https://{domain}/") as response:
-                result.http_status = response.status_code
-                result.http_ok = response.status_code in ACCEPTED_HTTP_STATUSES
+            # Streaming prevents a non-compliant custom server from forcing an
+            # unbounded response body into memory. GET is only a HEAD fallback.
+            http_started = time.perf_counter()
+            try:
+                with client.stream("HEAD", f"https://{domain}/") as response:
+                    status = response.status_code
+                if status == 405:
+                    with client.stream("GET", f"https://{domain}/") as response:
+                        status = response.status_code
+            except httpx.HTTPError:
+                with client.stream("GET", f"https://{domain}/") as response:
+                    status = response.status_code
+            result.http_latency_ms = round((time.perf_counter() - http_started) * 1000, 1)
+            result.http_status = status
+            result.http_ok = status in ACCEPTED_HTTP_STATUSES
     except ssl.SSLCertVerificationError as exc:
         result.error = f"TLS certificate validation failed: {exc.verify_message}"
     except (ssl.SSLError, OSError, httpx.HTTPError, ValueError) as exc:
