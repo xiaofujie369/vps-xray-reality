@@ -30,6 +30,18 @@ if [ -z "${PYTHON_BIN}" ]; then
     exit 1
 fi
 
+PYTHON_VERSION="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if ! "${PYTHON_BIN}" -c 'import ensurepip' >/dev/null 2>&1; then
+    echo "ERROR: ${PYTHON_BIN} cannot bootstrap pip because ensurepip is missing." >&2
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "Install it, then rerun this script:" >&2
+        echo "  apt-get update && apt-get install -y python${PYTHON_VERSION}-venv" >&2
+    else
+        echo "Install the venv/ensurepip package for Python ${PYTHON_VERSION}, then rerun this script." >&2
+    fi
+    exit 1
+fi
+
 if [ "${1:-}" = "--local" ]; then
     SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
     SOURCE="$(dirname -- "${SCRIPT_DIR}")"
@@ -42,7 +54,11 @@ else
 fi
 
 mkdir -p "${INSTALL_ROOT}" "${BIN_DIR}"
-"${PYTHON_BIN}" -m venv "${INSTALL_ROOT}/venv"
+if ! "${PYTHON_BIN}" -m venv "${INSTALL_ROOT}/venv"; then
+    echo "ERROR: Failed to create the virtual environment with ${PYTHON_BIN}." >&2
+    echo "Install the venv package for Python ${PYTHON_VERSION}, then rerun this script." >&2
+    exit 1
+fi
 "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade pip
 "${INSTALL_ROOT}/venv/bin/python" -m pip install --upgrade "${SOURCE}"
 ln -sfn "${INSTALL_ROOT}/venv/bin/asn-reality-audit" "${BIN_DIR}/asn-reality-audit"

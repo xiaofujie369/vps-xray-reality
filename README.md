@@ -32,6 +32,18 @@ cd vps-xray-reality
 
 Ensure `~/.local/bin` is in `PATH`, then run `asn-reality-audit --version`.
 
+On minimal Debian/Ubuntu images, Python may be installed without its virtual-environment
+support. Install the matching package before rerunning the installer, for example:
+
+```bash
+apt-get update
+apt-get install -y python3.11-venv
+```
+
+The installer checks `ensurepip` before creating anything and prints the package name
+matching the selected Python version. A failed installation does not create the command;
+after installing the package, simply rerun `./scripts/install.sh --local`.
+
 Manual virtual-environment installation remains available:
 
 ```bash
