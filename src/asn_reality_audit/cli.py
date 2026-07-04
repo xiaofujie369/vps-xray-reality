@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -12,12 +12,17 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from . import __version__
 from .asn_lookup import lookup_asn
+from .domain_discovery import discover_same_prefix_domains
 from .domain_test import BUILTIN_DOMAINS, load_domain_list, test_domain
 from .ip_detect import detect_default_interfaces, detect_public_ips
-from .models import AuditReport, DomainResult, ServerInfo
-from .report import build_xray_suggestions, print_terminal_report, write_json_report, write_markdown_report
+from .models import AuditReport, DomainDiscoveryConfig, DomainResult, ServerInfo
+from .report import (
+    build_xray_suggestions,
+    print_terminal_report,
+    write_json_report,
+    write_markdown_report,
+)
 from .scoring import score_asn
-
 
 app = typer.Typer(
     name="asn-reality-audit",
@@ -85,6 +90,16 @@ def main(
     output: Annotated[Path, typer.Option("--output", file_okay=False, help="Report output directory.")] = Path("asn-reality-report"),
     timeout: Annotated[float, typer.Option("--timeout", min=0.5, max=30.0, help="Per-operation network timeout.")] = 5.0,
     no_ipv6: Annotated[bool, typer.Option("--no-ipv6", help="Skip IPv6 detection and domain addresses.")] = False,
+    discover_prefix_domains: Annotated[bool, typer.Option("--discover-prefix-domains", help="Discover long-lived HTTPS domains related to this prefix.")] = False,
+    prefix_scan_limit: Annotated[int, typer.Option("--prefix-scan-limit", min=1, max=256, help="Maximum sampled IPs in the current prefix.")] = 64,
+    passive_only: Annotated[bool, typer.Option("--passive-only", help="Do not probe sampled IP addresses on TCP/443.")] = False,
+    allow_light_probe: Annotated[bool, typer.Option("--allow-light-probe", help="Allow bounded TCP/443 and TLS probes of sampled prefix IPs.")] = False,
+    min_domain_age_days: Annotated[int, typer.Option("--min-domain-age-days", min=1, max=36500, help="Minimum RDAP or CT history age.")] = 365,
+    same_prefix_only: Annotated[bool, typer.Option("--same-prefix-only", help="Only recommend names resolving inside the current prefix.")] = False,
+    same_asn_only: Annotated[bool, typer.Option("--same-asn-only", help="Also allow names resolving elsewhere in the current ASN.")] = False,
+    include_external_cdn: Annotated[bool, typer.Option("--include-external-cdn", help="Allow known CDN/hyperscaler relations.")] = False,
+    exclude_sensitive: Annotated[bool, typer.Option("--exclude-sensitive/--no-exclude-sensitive", help="Exclude sensitive domain categories.")] = True,
+    discovery_timeout: Annotated[float, typer.Option("--discovery-timeout", min=0.5, max=30.0, help="Discovery operation timeout.")] = 5.0,
     verbose: Annotated[bool, typer.Option("--verbose", help="Show failed probes and lookup details.")] = False,
     version: Annotated[bool, typer.Option("--version", callback=_version_callback, is_eager=True)] = False,
 ) -> None:
@@ -92,6 +107,12 @@ def main(
     del version
     include_ipv6 = not no_ipv6
     warnings: list[str] = []
+    if passive_only and allow_light_probe:
+        console.print("[red]ERROR:[/red] --passive-only and --allow-light-probe cannot be combined.")
+        raise typer.Exit(2)
+    if same_prefix_only and same_asn_only:
+        console.print("[red]ERROR:[/red] --same-prefix-only and --same-asn-only cannot be combined.")
+        raise typer.Exit(2)
 
     manual_ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
     if ip:
@@ -99,7 +120,7 @@ def main(
             manual_ip = ipaddress.ip_address(ip)
         except ValueError:
             console.print(f"[red]ERROR:[/red] Invalid IP address: {ip}")
-            raise typer.Exit(2)
+            raise typer.Exit(2) from None
         if manual_ip.version == 6 and no_ipv6:
             console.print("[red]ERROR:[/red] An IPv6 --ip cannot be used with --no-ipv6.")
             raise typer.Exit(2)
@@ -141,7 +162,7 @@ def main(
         domains = load_domain_list(str(domain_list)) if domain_list else list(BUILTIN_DOMAINS)
     except (OSError, ValueError) as exc:
         console.print(f"[red]ERROR:[/red] Could not load domain list: {exc}")
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     if len(domains) > 100:
         console.print("[red]ERROR:[/red] Domain lists are limited to 100 unique candidates.")
         raise typer.Exit(2)
@@ -163,13 +184,42 @@ def main(
     xray_server = xray_client = None
     if top_domains:
         xray_server, xray_client = build_xray_suggestions(top_domains[0])
+
+    discovery = None
+    if discover_prefix_domains:
+        discovery_config = DomainDiscoveryConfig(
+            enabled=True,
+            prefix_scan_limit=prefix_scan_limit,
+            passive_only=passive_only or not allow_light_probe,
+            allow_light_probe=allow_light_probe,
+            min_domain_age_days=min_domain_age_days,
+            same_prefix_only=same_prefix_only,
+            same_asn_only=same_asn_only,
+            include_external_cdn=include_external_cdn,
+            exclude_sensitive=exclude_sensitive,
+            timeout=discovery_timeout,
+        )
+        mode = "light 443/TLS" if allow_light_probe else "passive"
+        with console.status(f"Discovering long-lived prefix domains ({mode}, limit {prefix_scan_limit})..."):
+            discovery = discover_same_prefix_domains(
+                current_ip=lookup_ip,
+                prefix=asn.prefix,
+                current_asn=asn.number,
+                config=discovery_config,
+            )
+        if not discovery.candidates:
+            warnings.append(
+                "No long-lived same-prefix domains were found; this is common for small or reseller prefixes."
+            )
+
     report = AuditReport(
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         server=server,
         asn=asn,
         top_domains=top_domains,
         xray_server=xray_server,
         xray_client=xray_client,
+        same_prefix_domain_discovery=discovery,
         warnings=warnings,
     )
     print_terminal_report(report, console, verbose=verbose)
@@ -182,7 +232,7 @@ def main(
             written.append(write_markdown_report(report, output))
     except OSError as exc:
         console.print(f"[red]ERROR:[/red] Could not write reports to {output}: {exc}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     for path in written:
         console.print(f"[green]Wrote[/green] {path.resolve()}")
 

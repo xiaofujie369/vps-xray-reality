@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 
-from .models import ASNInfo, ASNLookupResult, DomainResult
-
+from .models import ASNInfo, ASNLookupResult, DomainRelation, DomainResult
 
 ASN_TYPES: dict[int, str] = {
     16509: "hyperscaler",
@@ -129,3 +128,36 @@ def score_domain(result: DomainResult, reputable: bool = True) -> DomainResult:
         "not recommended"
     )
     return result
+
+
+def score_long_lived_domain(
+    probe: DomainResult,
+    relation: DomainRelation,
+    domain_age_days: int | None,
+    ct_age_days: int | None,
+    wayback_age_days: int | None,
+    minimum_age_days: int,
+) -> tuple[int, str]:
+    score = 0
+    score += 25 if domain_age_days is not None and domain_age_days >= minimum_age_days else 0
+    score += 20 if ct_age_days is not None and ct_age_days >= minimum_age_days else 0
+    score += 10 if wayback_age_days is not None and wayback_age_days >= minimum_age_days else 0
+    score += 15 if probe.cert_valid and probe.cert_san_ok else 0
+    score += 10 if probe.tls_version == "TLSv1.3" else 0
+    score += 8 if probe.alpn == "h2" else 0
+    if relation == DomainRelation.same_prefix:
+        score += 25  # Same prefix also implies the same routed ASN.
+    elif relation == DomainRelation.same_asn:
+        score += 10
+    elif relation == DomainRelation.unrelated:
+        score -= 30
+    score += 8 if probe.http_ok else 0
+    score += 5 if probe.latency_ms is not None and probe.latency_ms <= 150 else 0
+    score = max(0, min(100, score))
+    rating = (
+        "excellent" if score >= 80 else
+        "good" if score >= 70 else
+        "usable" if score >= 60 else
+        "not recommended"
+    )
+    return score, rating

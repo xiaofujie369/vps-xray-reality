@@ -1,5 +1,10 @@
-from asn_reality_audit.models import ASNLookupResult, DomainResult
-from asn_reality_audit.scoring import classify_asn, score_asn, score_domain
+from asn_reality_audit.models import ASNLookupResult, DomainRelation, DomainResult
+from asn_reality_audit.scoring import (
+    classify_asn,
+    score_asn,
+    score_domain,
+    score_long_lived_domain,
+)
 
 
 def domain_result(**overrides: object) -> DomainResult:
@@ -47,3 +52,16 @@ def test_known_asn_classification_and_score() -> None:
     assert classify_asn(15169, None) == "hyperscaler"
     assert result.suitability == "excellent"
     assert 0 <= result.score <= 100
+
+
+def test_long_lived_domain_scoring_rewards_age_and_relation() -> None:
+    score, rating = score_long_lived_domain(
+        domain_result(http_ok=True),
+        DomainRelation.same_prefix,
+        domain_age_days=1000,
+        ct_age_days=800,
+        wayback_age_days=None,
+        minimum_age_days=365,
+    )
+    assert score == 100
+    assert rating == "excellent"

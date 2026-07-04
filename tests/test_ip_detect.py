@@ -1,4 +1,8 @@
-from asn_reality_audit.ip_detect import _choose_consensus, _valid_provider_ip, parse_route_output
+from asn_reality_audit.ip_detect import (
+    _choose_consensus,
+    _valid_provider_ip,
+    parse_route_output,
+)
 
 
 def test_choose_consensus_prefers_majority() -> None:

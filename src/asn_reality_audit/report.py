@@ -90,6 +90,55 @@ def print_terminal_report(report: AuditReport, console: Console, verbose: bool =
     else:
         console.print("[yellow]No recommended domain passed the minimum score and TLS checks.[/yellow]")
 
+    discovery = report.same_prefix_domain_discovery
+    if discovery is not None:
+        discovered = Table(title="Long-lived Same Prefix / Same ASN Domain Candidates")
+        discovered.add_column("#", justify="right")
+        discovered.add_column("Domain", style="bold")
+        discovered.add_column("Score", justify="right")
+        discovered.add_column("Relation")
+        discovered.add_column("Age")
+        discovered.add_column("CT history")
+        discovered.add_column("TLS")
+        discovered.add_column("HTTP")
+        discovered.add_column("Latency", justify="right")
+        for rank, item in enumerate(discovery.candidates[:10], 1):
+            discovered.add_row(
+                str(rank),
+                item.domain,
+                f"{item.score}/100",
+                item.relation.value,
+                f"{item.domain_age_days}d" if item.domain_age_days is not None else "unknown",
+                f"{item.earliest_ct_cert_age_days}d" if item.earliest_ct_cert_age_days is not None else "unknown",
+                item.tls.version or "failed",
+                str(item.http.status_code) if item.http.status_code is not None else "failed",
+                f"{item.http.latency_ms:.1f} ms" if item.http.latency_ms is not None else "-",
+            )
+        console.print(discovered)
+        console.print(
+            f"[dim]Prefix: {discovery.prefix or 'unknown'} | sampled IPs: "
+            f"{discovery.sampled_ip_count}/{discovery.scan_limit} | mode: {discovery.mode} | "
+            f"minimum age: {discovery.min_domain_age_days} days[/dim]"
+        )
+        if discovery.candidates:
+            reality = discovery.candidates[0].recommended_reality
+            console.print(
+                "[bold green]Recommended discovered-domain Reality settings[/bold green]\n"
+                f"serverName: [cyan]{reality.server_name}[/cyan]\n"
+                f"dest: [cyan]{reality.dest}[/cyan]\n"
+                f"fingerprint: [cyan]{reality.fingerprint}[/cyan]\n"
+                f"spiderX: [cyan]{reality.spider_x}[/cyan]"
+            )
+        else:
+            console.print(
+                "[yellow]No long-lived same-prefix domains were found. Try a larger safe limit, "
+                "--same-asn-only, or --include-external-cdn.[/yellow]"
+            )
+        if verbose:
+            for error in discovery.errors:
+                console.print(f"[dim]DISCOVERY: {error}[/dim]")
+            console.print(f"[dim]Discovery rejected {len(discovery.rejected)} candidates.[/dim]")
+
     for warning in report.warnings:
         console.print(f"[yellow]WARNING:[/yellow] {warning}")
     if verbose:
@@ -160,6 +209,7 @@ def render_markdown(report: AuditReport) -> str:
     server_snippet = json.dumps(report.xray_server, indent=2) if report.xray_server else "null"
     client_snippet = json.dumps(report.xray_client, indent=2) if report.xray_client else "null"
     settings = json.dumps(best_settings, indent=2) if best_settings else "null"
+    discovery_markdown = _render_discovery_markdown(report)
     return f"""# ASN Reality Audit Report
 
 Generated: `{report.timestamp.isoformat()}`
@@ -206,6 +256,8 @@ Generated: `{report.timestamp.isoformat()}`
 {client_snippet}
 ```
 
+{discovery_markdown}
+
 ## Warnings
 
 {warnings}
@@ -215,6 +267,64 @@ Generated: `{report.timestamp.isoformat()}`
 This is a one-shot local network intelligence result. It cannot guarantee that an IP,
 ASN, or domain will remain reachable from every region. The suggested configuration is
 never applied automatically.
+"""
+
+
+def _render_discovery_markdown(report: AuditReport) -> str:
+    discovery = report.same_prefix_domain_discovery
+    if discovery is None:
+        return ""
+    rows: list[str] = []
+    for rank, item in enumerate(discovery.candidates, 1):
+        resolved = ", ".join(item.resolved_ips)
+        age = f"{item.domain_age_days}d" if item.domain_age_days is not None else "unknown"
+        ct_age = (
+            f"{item.earliest_ct_cert_age_days}d"
+            if item.earliest_ct_cert_age_days is not None else "unknown"
+        )
+        rows.append(
+            f"| {rank} | {item.domain} | {item.score} | {item.relation.value} | {resolved} | "
+            f"{age} | {ct_age} | {item.tls.version or 'failed'} | "
+            f"{', '.join(item.tls.alpn) or '-'} | {item.http.status_code or '-'} | {item.recommended_reality.dest} |"
+        )
+    if not rows:
+        rows.append("| - | No qualifying candidate | - | - | - | - | - | - | - | - | - |")
+    reality = (
+        json.dumps(
+            discovery.candidates[0].recommended_reality.model_dump(mode="json", by_alias=True),
+            indent=2,
+        )
+        if discovery.candidates else "null"
+    )
+    errors = "\n".join(f"- {error}" for error in discovery.errors) or "- None"
+    return f"""## Long-lived Same Prefix / Same ASN Domain Candidates
+
+### Summary
+
+- Current prefix: `{discovery.prefix or 'unknown'}`
+- ASN: `{'AS' + str(discovery.asn) if discovery.asn else 'unknown'}`
+- Sampled IPs: `{discovery.sampled_ip_count}/{discovery.scan_limit}`
+- Minimum domain age: `{discovery.min_domain_age_days} days`
+- Discovery mode: `{discovery.mode}`
+
+### Top Candidates
+
+| Rank | Domain | Score | Relation | Resolved IPs | Age | CT History | TLS | ALPN | HTTP | Reality |
+|---:|---|---:|---|---|---:|---:|---|---|---|---|
+{chr(10).join(rows)}
+
+### Recommended Reality Settings
+
+```json
+{reality}
+```
+
+### Discovery Notes
+
+{errors}
+
+Same-prefix long-lived domains are preferred when available. Passive sources may be
+incomplete or rate-limited, and no result is guaranteed to avoid filtering.
 """
 
 

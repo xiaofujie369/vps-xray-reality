@@ -56,3 +56,9 @@ def test_cli_writes_requested_reports(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert (output / "report.json").is_file()
     assert (output / "report.md").is_file()
+
+
+def test_discovery_mode_options_are_mutually_exclusive() -> None:
+    result = CliRunner().invoke(cli.app, ["--passive-only", "--allow-light-probe"])
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.output
